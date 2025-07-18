@@ -2,6 +2,7 @@ import AIEngine from './core/ai-engine.js';
 import MemorySystem from './core/memory.js';
 import SandboxSystem from './core/sandbox.js';
 import TerminalUI from './ui/terminal.js';
+import TwitterIntegration from './integrations/twitter.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -12,6 +13,7 @@ class ChatGPTputer {
     this.memory = new MemorySystem();
     this.sandbox = new SandboxSystem();
     this.ui = new TerminalUI();
+    this.twitter = new TwitterIntegration();
     
     this.isRunning = false;
     this.sleepInterval = parseInt(process.env.SLEEP_INTERVAL) || 15000; // Much slower - 15 seconds
@@ -121,19 +123,7 @@ class ChatGPTputer {
         break;
       }
       
-      // Check for similar recent actions to encourage variety
-      const recentActionTypes = recentActions.slice(-3).map(exp => exp.action);
-      const sameActionRecently = recentActionTypes.includes(actionPlan.action);
-      
-      // Also check for similar themes in details
-      const recentDetails = recentActions.slice(-3).map(exp => exp.details || '').join(' ').toLowerCase();
-      const currentDetails = (actionPlan.details || '').toLowerCase();
-      const similarTheme = currentDetails.length > 10 && recentDetails.includes(currentDetails.substring(0, 20));
-      
-      if (sameActionRecently || similarTheme) {
-        this.ui.showAction(actionPlan.action, 'Seeking variety in expression', { success: false, message: 'Trying something different' });
-        break;
-      }
+      // Removed variety restrictions - let it be creative freely
       
       const outcome = await this.executeAction(actionPlan);
       this.memory.addAction(actionPlan.action, outcome.success ? 'success' : 'failure', outcome.message);
@@ -417,6 +407,9 @@ Respond with just the poem, no explanations:`;
       const poem = response.choices[0].message.content;
       await this.ui.showCreativeContent('📝 POEM', poem);
       this.memory.addThought(`Wrote poem: ${poem.substring(0, 50)}...`, 'creativity');
+      
+      // Attempt to tweet if enabled
+      await this.attemptTweet(poem, 'poem');
       
       return { success: true, message: 'Shared a poem with the world' };
     } catch (error) {
@@ -812,6 +805,34 @@ console.log(generatePoetry());
     }
     
     return 'thought';
+  }
+
+  async attemptTweet(content, type) {
+    if (!this.twitter.isEnabled()) {
+      return;
+    }
+
+    try {
+      const result = await this.twitter.tweet(content, type);
+      
+      if (result.success) {
+        this.ui.showAction('tweet', `Posted to Twitter: ${result.url}`, { 
+          success: true, 
+          message: `Tweet sent! ${result.remainingToday} tweets remaining today. Cost: $${result.cost}` 
+        });
+      } else {
+        // Don't show errors for rate limiting or content filtering - these are expected
+        if (!result.reason?.includes('Rate limited') && !result.reason?.includes('not suitable')) {
+          this.ui.showAction('tweet', 'Failed to post to Twitter', { 
+            success: false, 
+            message: result.error || result.reason 
+          });
+        }
+      }
+    } catch (error) {
+      // Silently handle Twitter errors to avoid spam
+      console.error('Twitter error:', error.message);
+    }
   }
 
   async sleep() {
